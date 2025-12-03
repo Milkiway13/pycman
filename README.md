@@ -29,6 +29,7 @@ After all of this you can run ```pycman``` command with flags.
 |```-S```|```pycman -S```|Syncs database with current [official repository](https://github.com/Milkiway13/pycman-repo) database
 # To Do
 - [ ] Create install script
+- [ ] Add symlink removing after uninstalling package
 - [ ] Improve builders
 - [ ] Package versions
 
