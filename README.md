@@ -22,7 +22,7 @@ After all of this you can run ```pycman``` command with flags.
 ## Flags
 | Flag | Usage | Description |
 |---|---|---|
-|```-I```|```pycman -I <package name>```|Downloads package from the official [repository](https://github.com/Milkiway13/pycman-repo)|
+|```-I```|```pycman -I <package name>```|Downloads package from the [official repository](https://github.com/Milkiway13/pycman-repo)|
 |```-SI```|```pycman -SI <link to git repository>```|Downloads package from public git repository|
 |```-L```|```pycman -L```|Lists all installed packages through pycman|
 |```-U```|```pycman -U <package name>```|Uninstalls package downloaded through pycman|
