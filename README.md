@@ -1,4 +1,4 @@
-# Pycman
+<img width="222" height="53" alt="image" src="https://github.com/user-attachments/assets/9b8f0397-2457-484e-ac78-b4c6cc39a6b0" /># Pycman
 Pycman - Python Package Manager. This is a package manage, which is complete wrote in python. It's using to manage packages downloaded through Github and others git repos.
 # WARNING
 Work of this package manager isn't 100% guranteed, espacially on not Arch-based distros.
@@ -11,14 +11,15 @@ For now pycman can:
 - List all installed packages
 # Prerequisites
 - Install Python
+# Installation
+Just simply run this commands and pycman will be installed:
+```bash
+git clone https://github.com/Milkiway13/pycman.git
+cd pycman
+sh installer.sh
+```
 # Usage
-In order to use pycman you need to clone repository and move ```pycman``` to ```~/.pycman``` and create ```packages``` directory inside ```~/.pycman```.
-
-You also need to create a symlink, so you can launch it anywhere.
-
-Then you run ```pycman -S``` to get the [official repository](https://github.com/Milkiway13/pycman-repo) database
-
-After all of this you can run ```pycman``` command with flags.
+Run ```pycman``` with flags listed below.
 ## Flags
 | Flag | Usage | Description |
 |---|---|---|
