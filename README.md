@@ -30,9 +30,10 @@ Run ```pycman``` with flags listed below.
 |```-S```|```pycman -S```|Syncs database with current [official repository](https://github.com/Milkiway13/pycman-repo) database
 # To Do
 - [x] Create install script
-- [ ] Add symlink removing after uninstalling package
+- [x] Fix symlink removing after uninstalling package
 - [ ] Improve builders
 - [ ] Package versions
+- [ ] Dependecies
 
 For now that's full To Do
 
