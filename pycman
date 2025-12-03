@@ -1,0 +1,578 @@
+#!/usr/bin/env python3
+import argparse
+import subprocess
+import tempfile
+import shutil
+import os
+import json
+from pathlib import Path
+
+HOME = str(Path.home())
+REGISTRY_PATH = os.path.join(HOME, ".pycman/.pycman_registry.json")
+PACKAGES_PATH = os.path.join(HOME, ".pycman/packages")
+BIN_SYMLINK_PATH = os.path.join(HOME, ".local/bin")
+REPO_DB_PATH = os.path.join(HOME, ".pycman/repo.json")
+
+os.makedirs(PACKAGES_PATH, exist_ok=True)
+os.makedirs(BIN_SYMLINK_PATH, exist_ok=True)
+# =====================================================
+# REGISTRY
+# =====================================================
+
+def load_registry():
+    if not os.path.exists(REGISTRY_PATH):
+        return {}
+    try:
+        with open(REGISTRY_PATH, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_registry(data):
+    with open(REGISTRY_PATH, "w") as f:
+        json.dump(data, f, indent=4)
+
+# =====================================================
+# LOAD REPOSITORY DATABASE
+# =====================================================
+
+def load_repo_db():
+    if not os.path.exists(REPO_DB_PATH):
+        return {}
+    try:
+        with open(REPO_DB_PATH, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print("ERROR: Failed to read repo database:", e)
+        return {}
+
+# =====================================================
+# GIT CLONE
+# =====================================================
+
+def git_clone(url, dest):
+    try:
+        subprocess.check_call(["git", "clone", "--depth", "1", url, dest])
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+# =====================================================
+# LANGUAGE DETECT (recursive)
+# =====================================================
+
+def detect_language(path):
+    all_files = []
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            full = os.path.join(root, f)
+            all_files.append(full)
+
+    # C / C++
+    if any(f.endswith(".c") for f in all_files):
+        return "c"
+    if any(f.endswith(".cpp") for f in all_files):
+        return "cpp"
+
+    # Gradle JVM / Kotlin / Java
+    if any(f.endswith("build.gradle") or f.endswith("build.gradle.kts") for f in all_files):
+        return "gradle"
+
+    # Rust
+    if any("Cargo.toml" in f for f in all_files):
+        return "rust"
+
+    # Go
+    if any("go.mod" in f for f in all_files):
+        return "go"
+
+    # Kotlin raw
+    if any(f.endswith(".kt") for f in all_files):
+        return "kotlin"
+
+    # Java raw
+    if any(f.endswith(".java") for f in all_files):
+        return "java"
+
+    # Python
+    if any(f.endswith(".py") for f in all_files):
+        return "python"
+
+    return None
+
+# =====================================================
+# BUILDERS
+# =====================================================
+
+def build_rust(path):
+    try:
+        subprocess.check_call(["cargo", "build", "--release"], cwd=path)
+        target = os.path.join(path, "target/release")
+        for f in os.listdir(target):
+            fp = os.path.join(target, f)
+            if os.path.isfile(fp) and os.access(fp, os.X_OK):
+                return fp
+        return None
+    except:
+        return None
+
+def build_go(path):
+    try:
+        subprocess.check_call(["go", "build", "."], cwd=path)
+        bin_path = os.path.join(path, os.path.basename(path))
+        return bin_path if os.path.exists(bin_path) else None
+    except:
+        return None
+
+def build_java(path, pkg_name):
+    """
+    Compile Java files and create an executable wrapper.
+    Returns path to wrapper script in ~/.pycman/packages/<pkg_name>
+    """
+    java_files = []
+    main_class = None
+
+    # Collect all .java files and detect main class
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            if f.endswith(".java"):
+                java_files.append(os.path.join(root, f))
+                # Quick heuristic: class containing 'public static void main'
+                with open(os.path.join(root, f), "r") as file:
+                    if "public static void main" in file.read():
+                        main_class = os.path.splitext(f)[0]
+
+    if not java_files:
+        print("ERROR: No Java files found")
+        return None
+
+    if not main_class:
+        print("ERROR: Could not detect main class")
+        return None
+
+    # Compile Java files
+    try:
+        subprocess.check_call(["javac"] + java_files, cwd=path)
+    except subprocess.CalledProcessError:
+        print("ERROR: Java compilation failed")
+        return None
+
+    # Package folder
+    pkg_dir = os.path.join(PACKAGES_PATH, pkg_name)
+    os.makedirs(pkg_dir, exist_ok=True)
+
+    # Copy all compiled .class files to package folder
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            if f.endswith(".class"):
+                shutil.copy2(os.path.join(root, f), pkg_dir)
+
+    # Create wrapper script
+    wrapper_path = os.path.join(pkg_dir, pkg_name)
+    wrapper_code = (
+        "#!/usr/bin/env bash\n"
+        f'exec java -cp "{pkg_dir}" {main_class} "$@"\n'
+    )
+
+    with open(wrapper_path, "w") as f:
+        f.write(wrapper_code)
+
+    os.chmod(wrapper_path, 0o755)
+    return wrapper_path
+
+
+def build_kotlin(path, pkg_name):
+    """
+    Compile Kotlin project and create an executable wrapper.
+    Supports JVM (jar) or Native (kexe).
+    Returns path to wrapper in ~/.pycman/packages/<pkg_name>
+    """
+    subprocess.check_call(["./gradlew", "wrapper", "--gradle-version", "8.3"], cwd=path)
+    # Then build
+    cmd = ["./gradlew", "build"]
+    subprocess.check_call(cmd, cwd=path)
+    kt_files = []
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            if f.endswith(".kt"):
+                kt_files.append(os.path.join(root, f))
+
+    if not kt_files:
+        print("ERROR: No Kotlin files found")
+        return None
+
+    pkg_dir = os.path.join(PACKAGES_PATH, pkg_name)
+    os.makedirs(pkg_dir, exist_ok=True)
+
+    # Detect JVM or Native build
+    print("\nKotlin project detected.")
+    print("Compile as:")
+    print("  1) JVM (jar)")
+    print("  2) Native binary")
+    choice = input("Choice [1/2]: ").strip()
+
+    # JVM build
+    if choice == "1" or choice == "":
+        jar_path = os.path.join(pkg_dir, f"{pkg_name}.jar")
+        try:
+            subprocess.check_call(["kotlinc"] + kt_files + ["-include-runtime", "-d", jar_path])
+        except subprocess.CalledProcessError:
+            print("ERROR: Kotlin JVM compilation failed")
+            return None
+
+        # Wrapper script
+        wrapper_path = os.path.join(pkg_dir, pkg_name)
+        wrapper_code = (
+            "#!/usr/bin/env bash\n"
+            f'exec java -jar "{jar_path}" "$@"\n'
+        )
+
+    # Native build
+    elif choice == "2":
+        kexe_path = os.path.join(pkg_dir, pkg_name)
+        try:
+            subprocess.check_call(["kotlinc-native"] + kt_files + ["-o", kexe_path])
+        except subprocess.CalledProcessError:
+            print("ERROR: Kotlin Native compilation failed")
+            return None
+
+       # Wrapper script (just points to the native binary)
+        wrapper_path = os.path.join(pkg_dir, pkg_name)
+        wrapper_code = (
+            "#!/usr/bin/env bash\n"
+            f'exec "{kexe_path}" "$@"\n'
+        )
+
+    else:
+        print("Invalid choice.")
+        return None
+
+    # Write wrapper and make executable
+    with open(wrapper_path, "w") as f:
+        f.write(wrapper_code)
+    os.chmod(wrapper_path, 0o755)
+ 
+    return wrapper_path
+
+def build_gradle(path, pkg_name):
+    """
+    Build Gradle project and create executable-like wrapper.
+    Supports JVM jars or Kotlin/Native binaries.
+    """
+    print("[+] Gradle project detected")
+
+    wrapper = os.path.join(path, "gradlew")
+    if os.path.exists(wrapper):
+        # Make gradlew executable
+        os.chmod(wrapper, 0o755)
+        cmd = ["./gradlew", "build"]
+    else:
+        cmd = ["gradle", "build"]
+
+    try:
+        subprocess.check_call(cmd, cwd=path)
+    except subprocess.CalledProcessError:
+        print("ERROR: Gradle build failed")
+        return None
+
+    pkg_dir = os.path.join(PACKAGES_PATH, pkg_name)
+    os.makedirs(pkg_dir, exist_ok=True)
+
+    # Look for output artifacts
+    jar_candidates = []
+    native_candidates = []
+
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            full = os.path.join(root, f)
+            if f.endswith(".jar") and "libs" in root:
+                jar_candidates.append(full)
+            if f.endswith(".kexe"):
+                native_candidates.append(full)
+
+    if native_candidates:
+        out_file = os.path.join(pkg_dir, os.path.basename(native_candidates[0]))
+        shutil.copy2(native_candidates[0], out_file)
+        wrapper_code = f"""#!/usr/bin/env bash
+exec "{out_file}" "$@"
+"""
+    elif jar_candidates:
+        jar_path = os.path.join(pkg_dir, os.path.basename(jar_candidates[0]))
+        shutil.copy2(jar_candidates[0], jar_path)
+        wrapper_code = f"""#!/usr/bin/env bash
+exec java -jar "{jar_path}" "$@"
+"""
+    else:
+        print("ERROR: No build artifacts found")
+        return None
+
+    wrapper_path = os.path.join(pkg_dir, pkg_name)
+    with open(wrapper_path, "w") as f:
+        f.write(wrapper_code)
+    os.chmod(wrapper_path, 0o755)
+
+    return wrapper_path
+
+def build_c(path):
+    if os.path.exists(os.path.join(path, "Makefile")):
+        try:
+            subprocess.check_call(["make"], cwd=path)
+        except:
+            return None
+
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            full = os.path.join(root, f)
+            if f.endswith(".c"):
+                out = full[:-2]
+                try:
+                    subprocess.check_call(["gcc", full, "-o", out])
+                    return out
+                except:
+                    return None
+
+    return None
+
+def build_cpp(path):
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            if f.endswith(".cpp"):
+                full = os.path.join(root, f)
+                out = full[:-4]
+                try:
+                    subprocess.check_call(["g++", full, "-o", out])
+                    return out
+                except:
+                    return None
+    return None
+
+def build_python(path, pkg_name):
+    """
+    Copies Python main file into ~/.pycman/packages/<pkg_name>/ and creates executable wrapper.
+    """
+    # Find main file
+    main_file = None
+    for root, dirs, files in os.walk(path):
+        if "main.py" in files:
+            main_file = os.path.join(root, "main.py")
+            break
+
+    if not main_file:
+        pyfiles = [os.path.join(root, f) for root, dirs, files in os.walk(path) for f in files if f.endswith(".py")]
+        if len(pyfiles) == 1:
+            main_file = pyfiles[0]
+        else:
+            print("ERROR: Multiple Python files, no main.py found")
+            return None
+
+    # Create package folder
+    pkg_dir = os.path.join(PACKAGES_PATH, pkg_name)
+    os.makedirs(pkg_dir, exist_ok=True)
+
+    # Copy main file into package folder
+    dest_file = os.path.join(pkg_dir, os.path.basename(main_file))
+    shutil.copy2(main_file, dest_file)
+
+    # Create wrapper script pointing to the copied file
+    wrapper_path = os.path.join(pkg_dir, pkg_name)
+    wrapper_code = (
+        "#!/usr/bin/env python3\n"
+        "import runpy\n"
+        f'runpy.run_path(r"{dest_file}", run_name="main")\n'
+    )
+
+    with open(wrapper_path, "w") as f:
+        f.write(wrapper_code)
+
+    os.chmod(wrapper_path, 0o755)
+    return wrapper_path
+
+# =====================================================
+# INSTALL
+# =====================================================
+
+def install_package(url):
+    registry = load_registry()
+    tmp = tempfile.mkdtemp(prefix="pycman_")
+
+    print(f"[+] Downloading {url}")
+    if not git_clone(url, tmp):
+        print("ERROR: Git clone failed.")
+        shutil.rmtree(tmp)
+        return
+
+    lang = detect_language(tmp)
+    if not lang:
+        print("ERROR: Unsupported project.")
+        shutil.rmtree(tmp)
+        return
+
+    print(f"[+] Language detected: {lang}")
+    
+    name = os.path.basename(url).replace(".git", "")
+
+    if lang == "rust": out = build_rust(tmp)
+    elif lang == "go": out = build_go(tmp)
+    elif lang == "gradle": out = build_gradle(tmp, name)
+    elif lang == "kotlin": out = build_kotlin(tmp, name)
+    elif lang == "java": out = build_java(tmp, name)
+    elif lang == "python": out = build_python(tmp, name)
+    elif lang == "c": out = build_c(tmp)
+    elif lang == "cpp": out = build_cpp(tmp)
+    else:
+        print("ERROR: No builder available.")
+        shutil.rmtree(tmp)
+        return
+
+    if not out:
+        print("ERROR: Build failed.")
+        shutil.rmtree(tmp)
+        return
+
+    name = os.path.basename(url).replace(".git", "")
+    pkg_install_dir = os.path.join(PACKAGES_PATH, name)
+    os.makedirs(pkg_install_dir, exist_ok=True)
+    install_path = os.path.join(pkg_install_dir, os.path.basename(out))
+
+    # Copy/build artifact to packages directory
+    if lang == "python":
+        wrapper_path = os.path.join(pkg_install_dir, "run.py")
+        wrapper = f"#!/usr/bin/env python3\nimport runpy; runpy.run_path('{out}', run_name='main')\n"
+        with open(wrapper_path, "w") as f:
+            f.write(wrapper)
+        os.chmod(wrapper_path, 0o755)
+        install_path = wrapper_path
+    elif out.endswith(".jar"):
+        wrapper_path = os.path.join(pkg_install_dir, os.path.basename(out) + "_launcher.sh")
+        wrapper = f"#!/usr/bin/env bash\nexec java -jar '{out}' \"$@\"\n"
+        with open(wrapper_path, "w") as f:
+            f.write(wrapper)
+        os.chmod(wrapper_path, 0o755)
+        install_path = wrapper_path
+    else:
+        shutil.copy(out, install_path)
+        os.chmod(install_path, 0o755)
+
+    # Create symlink in ~/.local/bin
+    symlink_path = os.path.join(BIN_SYMLINK_PATH, name)
+    if os.path.islink(symlink_path) or os.path.exists(symlink_path):
+        os.remove(symlink_path)
+    os.symlink(install_path, symlink_path)
+
+    registry[name] = url
+    save_registry(registry)
+
+    shutil.rmtree(tmp)
+    print(f"[✓] Installed: {name} (symlink: {symlink_path})")
+
+# =====================================================
+# INSTALL FROM REPOSITORY DATABASE
+# =====================================================
+
+def install_from_repo(name):
+    repos = load_repo_db()
+    if name not in repos:
+        print(f"ERROR: Package '{name}' not found in repo database.")
+        return
+
+    url = repos[name]
+    install_package(url)
+
+# =====================================================
+# UNINSTALL
+# =====================================================
+
+def uninstall_package(name):
+    reg = load_registry()
+    if name not in reg:
+        print("Not installed:", name)
+        return
+
+    pkg_dir = os.path.join(PACKAGES_PATH, name)
+    if os.path.exists(pkg_dir):
+        shutil.rmtree(pkg_dir)
+
+    symlink_path = os.path.join(BIN_SYMLINK_PATH, name)
+    if os.path.exists(symlink_path):
+        os.remove(symlink_path)
+
+    del reg[name]
+    save_registry(reg)
+    print(f"[✓] Uninstalled: {name}")
+
+# =====================================================
+# LIST
+# =====================================================
+
+def list_packages():
+    reg = load_registry()
+    if not reg:
+        print("No packages installed.")
+        return
+
+    print("Installed packages:")
+    for name, url in reg.items():
+        print(f"  {name} -> {url}")
+
+# =====================================================
+# SYNC DATABASE
+# =====================================================
+
+def sync_repo():
+    tmp = tempfile.mkdtemp(prefix="pycman_repo_")
+    repo_url = "https://github.com/Milkiway13/pycman-repo.git"
+    repo_file = "repo.json"
+    dest_file = os.path.join(HOME, ".pycman", "repo.json")
+
+    print(f"[+] Syncing repo database from {repo_url} ...")
+
+    try:
+        subprocess.check_call(["git", "clone", "--depth", "1", repo_url, tmp])
+    except subprocess.CalledProcessError:
+        print("ERROR: Failed to clone repo database.")
+        shutil.rmtree(tmp)
+        return
+
+    src_path = os.path.join(tmp, repo_file)
+    if not os.path.exists(src_path):
+        print(f"ERROR: {repo_file} not found in the repository.")
+        shutil.rmtree(tmp)
+        return
+
+    # Replace existing repo.json
+    shutil.copy(src_path, dest_file)
+    print(f"[✓] Repo database synced to {dest_file}")
+
+    shutil.rmtree(tmp)
+
+# =====================================================
+# CLI
+# =====================================================
+
+def main():
+    p = argparse.ArgumentParser(description="pycman - package manager")
+
+    p.add_argument("-I", "--install", help="Install package from local repo database")
+    p.add_argument("-SI", "--source-install", help="Install from git URL")
+    p.add_argument("-U", "--uninstall", help="Uninstall package")
+    p.add_argument("-L", "--list", action="store_true", help="List installed packages")
+    p.add_argument("-S", "--sync", action="store_true", help="Sync repo database from remote")
+
+    args = p.parse_args()
+
+    if args.sync:
+        sync_repo()
+    elif args.install:
+        install_from_repo(args.install)
+    elif args.source_install:
+        install_package(args.source_install)
+    elif args.uninstall:
+        uninstall_package(args.uninstall)
+    elif args.list:
+        list_packages()
+    else:
+        p.print_help()
+
+if __name__ == "__main__":
+    main()
+
