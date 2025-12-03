@@ -1,4 +1,4 @@
-<img width="222" height="53" alt="image" src="https://github.com/user-attachments/assets/9b8f0397-2457-484e-ac78-b4c6cc39a6b0" /># Pycman
+# Pycman
 Pycman - Python Package Manager. This is a package manage, which is complete wrote in python. It's using to manage packages downloaded through Github and others git repos.
 # WARNING
 Work of this package manager isn't 100% guranteed, espacially on not Arch-based distros.
