@@ -493,8 +493,7 @@ def uninstall_package(name):
         shutil.rmtree(pkg_dir)
 
     symlink_path = os.path.join(BIN_SYMLINK_PATH, name)
-    if os.path.exists(symlink_path):
-        os.remove(symlink_path)
+    os.remove(symlink_path)
 
     del reg[name]
     save_registry(reg)
