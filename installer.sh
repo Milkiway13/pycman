@@ -2,5 +2,5 @@ mkdir ~/.pycman
 mv pycman ~/.pycman
 cd ~/.pycman
 chmod +x pycman
-sudo ln -s pycman /usr/local/bin
+sudo ln -sf "$HOME/.pycman/pycman" /usr/local/bin/pycman
 pycman -S
